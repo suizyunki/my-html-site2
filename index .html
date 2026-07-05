@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>クリア水準器</title>
+<style>
+  /* 基本設定：背景は黒 */
+  body {
+    margin: 0;
+    overflow: hidden;
+    background-color: #000;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    touch-action: none;
+    color: white;
+  }
+
+  /* 画面を2分割するための巨大な背景レイヤー */
+  #split-bg {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    /* 画面を回転させても端が見えないように巨大に設定 */
+    width: 300vmax;
+    height: 300vmax;
+    /* 上半分は透明(黒が見える)、下半分を色付きに */
+    background: linear-gradient(to bottom, transparent 50%, transparent 50%);
+    transform-origin: center center;
+    /* JavaScriptで回転角度を制御 */
+    transform: translate(-50%, -50%) rotate(0deg);
+    z-index: 0;
+    transition: background 0.3s ease;
+  }
+
+  /* UI全体をまとめるコンテナ */
+  #ui-container {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 1;
+  }
+
+  /* 角度表示のコンテナ（回転用） */
+  #angle-text-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform-origin: center center;
+    z-index: 2;
+    pointer-events: none; /* タップの邪魔にならないように */
+  }
+
+  /* 角度の文字デザイン */
+  #angle-text {
+    font-size: 90px;
+    font-weight: 200; /* 細字でおしゃれに */
+    text-shadow: 0 4px 15px rgba(0,0,0,0.5); /* 影をつけて見やすく */
+    /* 文字自体の中心を合わせる */
+    transform: translate(-50%, -50%);
+  }
+
+  /* 光を反射する透明な水滴（泡） */
+  #bubble {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 120px;
+    height: 120px;
+    margin-top: -60px; /* 中心のズレ補正 */
+    margin-left: -60px;
+    border-radius: 50%;
+    
+    /* 水滴のハイライト（光の反射） */
+    background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.1) 40%, rgba(255,255,255,0) 70%);
+    
+    /* 内側と外側の影でガラスのような立体感を出す */
+    box-shadow: 
+      inset -10px -10px 20px rgba(0,0,0,0.3),
+      inset 10px 10px 20px rgba(255,255,255,0.6),
+      0 10px 30px rgba(0,0,0,0.5);
+      
+    /* 背景を少しぼかす（すりガラス・水滴効果） */
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    
+    /* 輪郭をシャープに */
+    border: 1px solid rgba(255,255,255,0.3);
+    
+    z-index: 3;
+    pointer-events: none;
+    /* スムーズに動かす */
+    transition: transform 0.05s linear;
+  }
+
+  /* 開始ボタン */
+  #start-btn {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    padding: 15px 30px;
+    font-size: 18px;
+    background: rgba(255,255,255,0.2);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: white;
+    border: 1px solid rgba(255,255,255,0.5);
+    border-radius: 30px;
+    cursor: pointer;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+  <div id="split-bg"></div>
+
+  <div id="ui-container">
+    <button id="start-btn">センサーを起動する</button>
+    
+    <div id="main-ui" class="hidden">
+      <div id="bubble"></div>
+      <div id="angle-text-container">
+        <div id="angle-text">0°</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const startBtn = document.getElementById('start-btn');
+  const mainUi = document.getElementById('main-ui');
+  const bubble = document.getElementById('bubble');
+  const angleTextContainer = document.getElementById('angle-text-container');
+  const angleText = document.getElementById('angle-text');
+  const splitBg = document.getElementById('split-bg');
+
+  let currentBeta = 0;
+  let currentGamma = 0;
+  
+  let offsetBeta = 0;
+  let offsetGamma = 0;
+  let isCalibrated = false;
+
+  // ランダムに選ばれる色の配列（ご要望のカラー）
+  const colors = ['#007aff', '#32ade6', '#ffcc00', '#ff9500', '#ff3b30', '#34c759'];
+
+  // センサー起動ボタンの処理
+  startBtn.addEventListener('click', () => {
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+      DeviceOrientationEvent.requestPermission()
+        .then(permissionState => {
+          if (permissionState === 'granted') {
+            startApp();
+          } else {
+            alert('センサーの利用が許可されませんでした。');
+          }
+        })
+        .catch(console.error);
+    } else {
+      startApp();
+    }
+  });
+
+  function startApp() {
+    startBtn.classList.add('hidden');
+    mainUi.classList.remove('hidden');
+    window.addEventListener('deviceorientation', handleOrientation);
+    
+    // 画面タップで設定をトグル（切り替え）する処理
+    document.body.addEventListener('click', () => {
+      if (!isCalibrated) {
+        // 【オフ → オン】現在の角度をゼロ点に設定し、色をつける
+        offsetBeta = currentBeta;
+        offsetGamma = currentGamma;
+        isCalibrated = true;
+        
+        // 配列からランダムに色を選ぶ
+        const randomColor = colors[Math.floor(Math.random() * colors.length)];
+        // 下半分に選んだ色を適用
+        splitBg.style.background = `linear-gradient(to bottom, transparent 50%, ${randomColor} 50%)`;
+        
+      } else {
+        // 【オン → オフ】設定をリセットし、黒に戻す
+        isCalibrated = false;
+        offsetBeta = 0;
+        offsetGamma = 0;
+        splitBg.style.background = `linear-gradient(to bottom, transparent 50%, transparent 50%)`;
+      }
+    });
+  }
+
+  // 傾きセンサーの処理
+  function handleOrientation(event) {
+    currentBeta = event.beta || 0;
+    currentGamma = event.gamma || 0;
+
+    // 1. 画面の回転角（ロール角）を計算して、水平線を保つ
+    const radBeta = currentBeta * (Math.PI / 180);
+    const radGamma = currentGamma * (Math.PI / 180);
+    const x = Math.sin(radGamma);
+    const y = Math.sin(radBeta) * Math.cos(radGamma);
+    // 重力方向をもとに画面がどれくらい回転しているかを算出
+    let rollAngle = Math.atan2(x, y) * (180 / Math.PI);
+    
+    // 背景の分割線を現実の水平に合わせる
+    splitBg.style.transform = `translate(-50%, -50%) rotate(${rollAngle}deg)`;
+
+    // 2. テキストの回転（文字が常に現実の水平を保つように逆回転）
+    angleTextContainer.style.transform = `translate(-50%, -50%) rotate(${-rollAngle}deg)`;
+
+    // 3. 泡（水滴）の移動処理（移動制限なし）
+    let displayBeta = currentBeta - offsetBeta;
+    let displayGamma = currentGamma - offsetGamma;
+
+    // 動きの感度を調整（数値を大きくするとより速く画面外へ飛び出します）
+    let moveY = displayBeta * 5; 
+    let moveX = displayGamma * 5;
+    
+    // 画面外でも動き続けるように translate で座標を更新
+    bubble.style.transform = `translate(${moveX}px, ${moveY}px)`;
+
+    // 4. 角度の計算と表示
+    const tiltAngle = Math.round(Math.sqrt(displayBeta * displayBeta + displayGamma * displayGamma));
+    angleText.innerText = `${tiltAngle}°`;
+  }
+</script>
+</body>
+</html>
